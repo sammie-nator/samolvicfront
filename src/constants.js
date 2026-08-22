@@ -1,0 +1,2 @@
+export const WHATSAPP_NUMBER = '254112318696'
+export const PHONE_DISPLAY = '+254 112 318 696'
