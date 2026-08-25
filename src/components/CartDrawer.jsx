@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { FiX } from 'react-icons/fi'
 import { FaWhatsapp } from 'react-icons/fa'
 
-// 🔧 CONFIGURE YOUR BACKEND URL HERE
-// For local testing: 'http://localhost:10000'
-// For production (Render): 'https://your-backend.onrender.com'
+// Configure your backend URL
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:10000'
 
 console.log('🔗 API_URL configured to:', API_URL)
@@ -19,118 +17,167 @@ export default function CartDrawer({
   placeOrder,
   orderStatus,
 }) {
-  const [phone, setPhone] = useState('')
-  const [paying, setPaying] = useState(false)
-  const [payStatus, setPayStatus] = useState(null)
-  const [payMessage, setPayMessage] = useState('')
+  // M-Pesa State
+  const [mpesaPhone, setMpesaPhone] = useState('')
+  const [mpesaPaying, setMpesaPaying] = useState(false)
+  const [mpesaStatus, setMpesaStatus] = useState(null)
+  const [mpesaMessage, setMpesaMessage] = useState('')
+
+  // Paystack State
+  const [paystackEmail, setPaystackEmail] = useState('')
+  const [paystackPaying, setPaystackPaying] = useState(false)
+  const [paystackStatus, setPaystackStatus] = useState(null)
+  const [paystackMessage, setPaystackMessage] = useState('')
+
+  // UI State
+  const [paymentMethod, setPaymentMethod] = useState(null)
 
   if (!open) return null
 
-  /**
-   * Handle M-Pesa payment
-   */
+  const getErrorMessage = (errorData) => {
+    if (!errorData) return 'Unknown error occurred'
+    if (typeof errorData === 'string') return errorData
+    if (typeof errorData === 'object') {
+      if (errorData.errorMessage) return errorData.errorMessage
+      if (errorData.message) return errorData.message
+      if (errorData.error) {
+        if (typeof errorData.error === 'string') return errorData.error
+        if (errorData.error.errorMessage) return errorData.error.errorMessage
+      }
+    }
+    return 'Unknown error occurred'
+  }
+
+  // ============================================================================
+  // M-PESA HANDLER
+  // ============================================================================
+
   const handleMpesaPay = async () => {
-    // ========== VALIDATION ==========
-    if (!phone || phone.trim() === '') {
-      setPayStatus('error')
-      setPayMessage('Please enter your phone number')
+    if (!mpesaPhone || mpesaPhone.trim() === '') {
+      setMpesaStatus('error')
+      setMpesaMessage('Please enter your phone number')
       return
     }
 
-    if (phone.replace(/\D/g, '').length < 9) {
-      setPayStatus('error')
-      setPayMessage('Please enter a valid phone number (e.g., 0712345678)')
+    if (mpesaPhone.replace(/\D/g, '').length < 9) {
+      setMpesaStatus('error')
+      setMpesaMessage('Invalid phone number')
       return
     }
 
     if (cart.length === 0) {
-      setPayStatus('error')
-      setPayMessage('Your cart is empty')
+      setMpesaStatus('error')
+      setMpesaMessage('Your cart is empty')
       return
     }
 
-    // ========== PAYMENT FLOW ==========
-    setPaying(true)
-    setPayStatus(null)
-    setPayMessage('')
+    setMpesaPaying(true)
+    setMpesaStatus(null)
+    setMpesaMessage('')
 
     try {
-      console.log('📱 Initiating M-Pesa payment...')
-      console.log('  Backend URL:', API_URL)
-      console.log('  Phone:', phone)
-      console.log('  Amount:', cartTotal)
+      console.log('📱 M-Pesa Payment...')
 
       const response = await fetch(`${API_URL}/api/mpesa/stkpush`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          phone: phone.trim(),
+          phone: mpesaPhone.trim(),
           amount: cartTotal,
           accountReference: `Order-${Date.now()}`,
         }),
       })
 
-      console.log('Response status:', response.status)
-
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(`HTTP ${response.status}`)
       }
 
       const data = await response.json()
-      console.log('Response data:', data)
 
-      // ========== SUCCESS ==========
       if (data.success) {
-        setPayStatus('success')
-        setPayMessage(
-          '✓ STK Push sent! Check your phone and enter your M-Pesa PIN to complete the payment.'
-        )
-        setPhone('')
-        // Optionally close cart after success
+        setMpesaStatus('success')
+        setMpesaMessage('✅ STK Push sent! Check your phone and enter M-Pesa PIN.')
+        setMpesaPhone('')
+
         setTimeout(() => {
           onClose()
-          setPayStatus(null)
+          setMpesaStatus(null)
+          setPaymentMethod(null)
         }, 3000)
-      }
-      // ========== ERROR FROM BACKEND ==========
-      else {
-        setPayStatus('error')
-
-        // Try to extract error message from different response formats
-        let errorMessage = 'Payment failed. Try again.'
-
-        if (data.error?.errorMessage) {
-          errorMessage = data.error.errorMessage
-        } else if (data.error?.error) {
-          errorMessage = data.error.error
-        } else if (typeof data.error === 'string') {
-          errorMessage = data.error
-        }
-
-        console.error('Backend error:', errorMessage)
-        setPayMessage(errorMessage)
-      }
-    }
-    // ========== NETWORK ERROR ==========
-    catch (err) {
-      console.error('Network error:', err)
-      setPayStatus('error')
-
-      if (err.message.includes('HTTP')) {
-        setPayMessage(
-          'Cannot reach payment server. Check if your backend is running on Render.'
-        )
-      } else if (err.message.includes('fetch')) {
-        setPayMessage('Network error. Check your internet connection.')
       } else {
-        setPayMessage(`Error: ${err.message}`)
+        setMpesaStatus('error')
+        setMpesaMessage(`❌ ${getErrorMessage(data?.error)}`)
       }
+    } catch (err) {
+      console.error('M-Pesa error:', err)
+      setMpesaStatus('error')
+      setMpesaMessage(`❌ ${err.message}`)
+    } finally {
+      setMpesaPaying(false)
     }
-    //========== CLEANUP ==========
-    finally {
-      setPaying(false)
+  }
+
+  // ============================================================================
+  // PAYSTACK HANDLER
+  // ============================================================================
+
+  const handlePaystackPay = async () => {
+    if (!paystackEmail || paystackEmail.trim() === '') {
+      setPaystackStatus('error')
+      setPaystackMessage('Please enter your email address')
+      return
+    }
+
+    // Simple email validation
+    if (!paystackEmail.includes('@')) {
+      setPaystackStatus('error')
+      setPaystackMessage('Please enter a valid email address')
+      return
+    }
+
+    if (cart.length === 0) {
+      setPaystackStatus('error')
+      setPaystackMessage('Your cart is empty')
+      return
+    }
+
+    setPaystackPaying(true)
+    setPaystackStatus(null)
+    setPaystackMessage('')
+
+    try {
+      console.log('💳 Paystack Payment...')
+
+      const response = await fetch(`${API_URL}/api/paystack/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: paystackEmail.trim(),
+          amount: cartTotal,
+          accountReference: `Order-${Date.now()}`,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const data = await response.json()
+
+      if (data.success && data.data?.authorizationUrl) {
+        console.log('Redirecting to Paystack...')
+        // Redirect user to Paystack payment page
+        window.location.href = data.data.authorizationUrl
+      } else {
+        setPaystackStatus('error')
+        setPaystackMessage(`❌ ${getErrorMessage(data?.error)}`)
+      }
+    } catch (err) {
+      console.error('Paystack error:', err)
+      setPaystackStatus('error')
+      setPaystackMessage(`❌ ${err.message}`)
+    } finally {
+      setPaystackPaying(false)
     }
   }
 
@@ -195,58 +242,126 @@ export default function CartDrawer({
               <span>KES {cartTotal.toLocaleString()}</span>
             </div>
 
+            {/* PAYMENT METHOD SELECTION */}
+            {!paymentMethod ? (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-gray-600">Choose Payment Method:</p>
+
+                {/* M-Pesa Button */}
+                <button
+                  onClick={() => setPaymentMethod('mpesa')}
+                  className="w-full rounded-lg border-2 border-green-500 bg-green-50 py-3 text-sm font-semibold text-green-700 transition hover:bg-green-100"
+                >
+                  💚 M-Pesa STK Push
+                </button>
+
+                {/* Paystack Button */}
+                <button
+                  onClick={() => setPaymentMethod('paystack')}
+                  className="w-full rounded-lg border-2 border-blue-500 bg-blue-50 py-3 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                >
+                  💳 Paystack Card Payment
+                </button>
+
+                {/* WhatsApp Fallback */}
+                <button
+                  onClick={placeOrder}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 py-2.5 text-sm font-medium text-gray-600 transition hover:bg-stone-50"
+                  disabled={orderStatus === 'sending'}
+                >
+                  <FaWhatsapp className="text-green-600" />
+                  {orderStatus === 'sending' ? 'Processing...' : 'Order via WhatsApp'}
+                </button>
+              </div>
+            ) : null}
+
             {/* M-PESA PAYMENT */}
-            <div className="rounded-xl border border-green-100 bg-green-50 p-4">
-              <p className="mb-2 text-sm font-medium text-green-800">
-                💚 Pay with M-Pesa
-              </p>
-
-              {/* PHONE INPUT */}
-              <input
-                type="tel"
-                placeholder="Enter phone number"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                disabled={paying}
-                className="mb-3 w-full rounded-lg border border-green-200 px-3 py-2.5 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100 disabled:bg-gray-100"
-              />
-
-              {/* PAY BUTTON */}
-              <button
-                onClick={handleMpesaPay}
-                disabled={paying || cart.length === 0}
-                className="w-full rounded-lg bg-green-600 py-3 text-sm font-semibold text-white transition hover:bg-green-700 disabled:bg-gray-400"
-              >
-                {paying ? '⏳ Sending STK Push...' : `💳 Pay KES ${cartTotal.toLocaleString()}`}
-              </button>
-
-              {/* STATUS MESSAGES */}
-              {payStatus === 'success' && (
-                <div className="mt-3 rounded-lg bg-green-100 p-3">
-                  <p className="text-center text-sm text-green-800">
-                    ✅ {payMessage}
-                  </p>
+            {paymentMethod === 'mpesa' && (
+              <div className="rounded-xl border border-green-100 bg-green-50 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-medium text-green-800">💚 Pay with M-Pesa</p>
+                  <button
+                    onClick={() => setPaymentMethod(null)}
+                    className="text-xs text-green-600 hover:text-green-700"
+                  >
+                    Change
+                  </button>
                 </div>
-              )}
 
-              {payStatus === 'error' && (
-                <div className="mt-3 rounded-lg bg-red-100 p-3">
-                  <p className="text-center text-sm text-red-800">
-                    ❌ {payMessage}
-                  </p>
+                <input
+                  type="tel"
+                  placeholder="Enter phone: 0712345678"
+                  value={mpesaPhone}
+                  onChange={(e) => setMpesaPhone(e.target.value)}
+                  disabled={mpesaPaying}
+                  className="mb-3 w-full rounded-lg border border-green-200 px-3 py-2.5 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100 disabled:bg-gray-100"
+                />
+
+                <button
+                  onClick={handleMpesaPay}
+                  disabled={mpesaPaying || cart.length === 0}
+                  className="w-full rounded-lg bg-green-600 py-3 text-sm font-semibold text-white transition hover:bg-green-700 disabled:bg-gray-400"
+                >
+                  {mpesaPaying ? '⏳ Sending...' : `💳 Pay KES ${cartTotal.toLocaleString()}`}
+                </button>
+
+                {mpesaStatus === 'success' && mpesaMessage && (
+                  <div className="mt-3 rounded-lg bg-green-100 p-3">
+                    <p className="text-center text-sm font-medium text-green-800">{mpesaMessage}</p>
+                  </div>
+                )}
+
+                {mpesaStatus === 'error' && mpesaMessage && (
+                  <div className="mt-3 rounded-lg bg-red-100 p-3">
+                    <p className="text-center text-sm font-medium text-red-800">{mpesaMessage}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* PAYSTACK PAYMENT */}
+            {paymentMethod === 'paystack' && (
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-medium text-blue-800">💳 Pay with Paystack</p>
+                  <button
+                    onClick={() => setPaymentMethod(null)}
+                    className="text-xs text-blue-600 hover:text-blue-700"
+                  >
+                    Change
+                  </button>
                 </div>
-              )}
-            </div>
 
-            {/* WHATSAPP FALLBACK */}
-            <button
-              onClick={placeOrder}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 py-2.5 text-sm font-medium text-gray-600 transition hover:bg-stone-50 disabled:opacity-60"
-              disabled={orderStatus === 'sending'}
-            >
-              <FaWhatsapp className="text-green-600" />
-              {orderStatus === 'sending' ? 'Processing...' : 'Order via WhatsApp'}
-            </button>
+                <input
+                  type="email"
+                  placeholder="Enter email"
+                  value={paystackEmail}
+                  onChange={(e) => setPaystackEmail(e.target.value)}
+                  disabled={paystackPaying}
+                  className="mb-3 w-full rounded-lg border border-blue-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-gray-100"
+                />
+
+                <button
+                  onClick={handlePaystackPay}
+                  disabled={paystackPaying || cart.length === 0}
+                  className="w-full rounded-lg bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:bg-gray-400"
+                >
+                  {paystackPaying ? '⏳ Processing...' : `💳 Pay KES ${cartTotal.toLocaleString()}`}
+                </button>
+
+                {paystackStatus === 'success' && paystackMessage && (
+                  <div className="mt-3 rounded-lg bg-green-100 p-3">
+                    <p className="text-center text-sm font-medium text-green-800">{paystackMessage}</p>
+                  </div>
+                )}
+
+                {paystackStatus === 'error' && paystackMessage && (
+                  <div className="mt-3 rounded-lg bg-red-100 p-3">
+                    <p className="text-center text-sm font-medium text-red-800">{paystackMessage}</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
