@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FiX } from 'react-icons/fi'
+import { FiX, FiCheckCircle } from 'react-icons/fi'
 import { FaWhatsapp } from 'react-icons/fa'
 
 // Configure your backend URL
@@ -32,6 +32,9 @@ export default function CartDrawer({
   // UI State
   const [paymentMethod, setPaymentMethod] = useState(null)
 
+  // Order Confirmation State
+  const [orderConfirmation, setOrderConfirmation] = useState(null)
+
   if (!open) return null
 
   const getErrorMessage = (errorData) => {
@@ -46,6 +49,33 @@ export default function CartDrawer({
       }
     }
     return 'Unknown error occurred'
+  }
+
+  // ============================================================================
+  // HANDLE SUCCESSFUL PAYMENT
+  // ============================================================================
+
+  const handlePaymentSuccess = (method, orderNumber, amount) => {
+    // Create order confirmation object
+    const confirmation = {
+      orderNumber: orderNumber,
+      amount: amount,
+      method: method,
+      timestamp: new Date().toLocaleString(),
+      items: cart,
+      status: 'Pending',
+    }
+
+    setOrderConfirmation(confirmation)
+
+    // Clear cart and reset state
+    setPaymentMethod(null)
+    setMpesaPhone('')
+    setPaystackEmail('')
+    setMpesaStatus(null)
+    setPaystackStatus(null)
+    setMpesaMessage('')
+    setPaystackMessage('')
   }
 
   // ============================================================================
@@ -78,13 +108,15 @@ export default function CartDrawer({
     try {
       console.log('📱 M-Pesa Payment...')
 
+      const orderNumber = `ORD-${Date.now()}`
+
       const response = await fetch(`${API_URL}/api/mpesa/stkpush`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: mpesaPhone.trim(),
           amount: cartTotal,
-          accountReference: `Order-${Date.now()}`,
+          accountReference: orderNumber,
         }),
       })
 
@@ -96,14 +128,16 @@ export default function CartDrawer({
 
       if (data.success) {
         setMpesaStatus('success')
-        setMpesaMessage('✅ STK Push sent! Check your phone and enter M-Pesa PIN.')
-        setMpesaPhone('')
+        setMpesaMessage(
+          '✅ STK Push sent! Check your phone and enter M-Pesa PIN.'
+        )
 
+        // Redirect to success page after 2 seconds
         setTimeout(() => {
-          onClose()
-          setMpesaStatus(null)
-          setPaymentMethod(null)
-        }, 3000)
+          const successUrl = `/payment/success?orderNumber=${orderNumber}&amount=${cartTotal}&method=M-Pesa`
+          console.log('Redirecting to success page:', successUrl)
+          window.location.href = successUrl
+        }, 2000)
       } else {
         setMpesaStatus('error')
         setMpesaMessage(`❌ ${getErrorMessage(data?.error)}`)
@@ -128,7 +162,6 @@ export default function CartDrawer({
       return
     }
 
-    // Simple email validation
     if (!paystackEmail.includes('@')) {
       setPaystackStatus('error')
       setPaystackMessage('Please enter a valid email address')
@@ -148,13 +181,15 @@ export default function CartDrawer({
     try {
       console.log('💳 Paystack Payment...')
 
+      const orderNumber = `ORD-${Date.now()}`
+
       const response = await fetch(`${API_URL}/api/paystack/initialize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: paystackEmail.trim(),
           amount: cartTotal,
-          accountReference: `Order-${Date.now()}`,
+          accountReference: orderNumber,
         }),
       })
 
@@ -166,8 +201,30 @@ export default function CartDrawer({
 
       if (data.success && data.data?.authorizationUrl) {
         console.log('Redirecting to Paystack...')
-        // Redirect user to Paystack payment page
-        window.location.href = data.data.authorizationUrl
+
+        // Show success confirmation with order number
+        setPaystackStatus('success')
+        setPaystackMessage(
+          `✅ Order #${orderNumber} created! Redirecting to payment page...`
+        )
+
+        // Store order info before redirecting (in case user returns)
+        sessionStorage.setItem(
+          'paymentOrder',
+          JSON.stringify({
+            orderNumber,
+            reference: data.data.reference,
+            amount: cartTotal,
+            email: paystackEmail,
+            items: cart,
+          })
+        )
+
+        // Redirect after 2 seconds
+        setTimeout(() => {
+          console.log('Redirecting to Paystack authorization URL')
+          window.location.href = data.data.authorizationUrl
+        }, 2000)
       } else {
         setPaystackStatus('error')
         setPaystackMessage(`❌ ${getErrorMessage(data?.error)}`)
@@ -180,6 +237,187 @@ export default function CartDrawer({
       setPaystackPaying(false)
     }
   }
+
+  // ============================================================================
+  // HANDLE CLOSE AFTER CONFIRMATION
+  // ============================================================================
+
+  const handleCloseAfterPayment = () => {
+    // Clear everything
+    setOrderConfirmation(null)
+    setPaymentMethod(null)
+    onClose()
+  }
+
+  // ============================================================================
+  // RENDER: ORDER CONFIRMATION SCREEN (Only for M-Pesa confirmation in drawer)
+  // ============================================================================
+
+  if (orderConfirmation) {
+    return (
+      <div className="fixed inset-0 z-[60] flex justify-end">
+        <div className="absolute inset-0 bg-black/40" onClick={handleCloseAfterPayment} />
+        <div className="relative flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
+          {/* CLOSE BUTTON */}
+          <div className="flex items-center justify-end border-b px-5 py-4">
+            <button onClick={handleCloseAfterPayment} className="rounded-full p-1 hover:bg-stone-100">
+              <FiX size={22} />
+            </button>
+          </div>
+
+          {/* CONFIRMATION CONTENT */}
+          <div className="flex-1 overflow-y-auto p-5">
+            {/* SUCCESS ICON */}
+            <div className="mb-6 flex justify-center">
+              <div className="rounded-full bg-green-100 p-4">
+                <FiCheckCircle size={48} className="text-green-600" />
+              </div>
+            </div>
+
+            {/* THANK YOU MESSAGE */}
+            <h2 className="mb-2 text-center text-2xl font-bold text-gray-800">
+              Thank You! 🎉
+            </h2>
+            <p className="mb-6 text-center text-sm text-gray-600">
+              Your payment has been received
+            </p>
+
+            {/* ORDER DETAILS CARD */}
+            <div className="mb-6 rounded-lg border-2 border-green-200 bg-green-50 p-4">
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-600">
+                    Order Number
+                  </span>
+                  <span className="font-mono text-sm font-bold text-gray-800">
+                    {orderConfirmation.orderNumber}
+                  </span>
+                </div>
+
+                <div className="border-t border-green-200 pt-3" />
+
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-600">
+                    Amount Paid
+                  </span>
+                  <span className="text-lg font-bold text-green-700">
+                    KES {orderConfirmation.amount.toLocaleString()}
+                  </span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-600">
+                    Payment Method
+                  </span>
+                  <span className="text-sm font-semibold text-gray-800">
+                    {orderConfirmation.method === 'M-Pesa'
+                      ? '💚 M-Pesa'
+                      : '💳 Paystack'}
+                  </span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-600">
+                    Date & Time
+                  </span>
+                  <span className="text-xs text-gray-700">
+                    {orderConfirmation.timestamp}
+                  </span>
+                </div>
+
+                <div className="border-t border-green-200 pt-3" />
+
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-600">
+                    Status
+                  </span>
+                  <span className="inline-block rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
+                    {orderConfirmation.status}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* ORDER ITEMS */}
+            <div className="mb-6">
+              <h3 className="mb-3 text-sm font-bold text-gray-700">
+                Order Items ({orderConfirmation.items.length})
+              </h3>
+              <div className="space-y-2">
+                {orderConfirmation.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between rounded bg-gray-50 p-2"
+                  >
+                    <span className="text-sm">
+                      {item.image} {item.name} x{item.qty}
+                    </span>
+                    <span className="text-sm font-semibold">
+                      KES {item.price * item.qty}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* NEXT STEPS */}
+            <div className="mb-6 rounded-lg bg-blue-50 p-4">
+              <h3 className="mb-2 text-sm font-bold text-blue-900">
+                What Happens Next?
+              </h3>
+              <ul className="space-y-2 text-xs text-blue-800">
+                <li>✓ We'll prepare your order</li>
+                <li>✓ You'll receive a confirmation SMS</li>
+                <li>✓ Delivery in 1-2 business days</li>
+                <li>✓ Track your order in your account</li>
+              </ul>
+            </div>
+
+            {/* IMPORTANT NOTE */}
+            <div className="mb-6 rounded-lg bg-yellow-50 p-3">
+              <p className="text-xs text-yellow-800">
+                <strong>⚠️ Important:</strong> Your payment has been completed.
+                You can safely close this window. Do not try to pay again.
+              </p>
+            </div>
+          </div>
+
+          {/* ACTION BUTTONS */}
+          <div className="space-y-3 border-t p-5">
+            {/* CONTINUE SHOPPING */}
+            <button
+              onClick={handleCloseAfterPayment}
+              className="w-full rounded-lg bg-green-600 py-3 text-sm font-semibold text-white transition hover:bg-green-700"
+            >
+              Continue Shopping
+            </button>
+
+            {/* CONTACT SUPPORT */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  window.location.href = 'https://wa.me/254112318696'
+                }}
+                className="flex-1 rounded-lg bg-green-500 py-2.5 text-xs font-semibold text-white transition hover:bg-green-600"
+              >
+                <FaWhatsapp className="mb-1 inline" /> WhatsApp Support
+              </button>
+              <button
+                onClick={handleCloseAfterPayment}
+                className="flex-1 rounded-lg bg-gray-200 py-2.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-300"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ============================================================================
+  // RENDER: NORMAL CART VIEW
+  // ============================================================================
 
   return (
     <div className="fixed inset-0 z-[60] flex justify-end">
@@ -245,7 +483,9 @@ export default function CartDrawer({
             {/* PAYMENT METHOD SELECTION */}
             {!paymentMethod ? (
               <div className="space-y-3">
-                <p className="text-sm font-medium text-gray-600">Choose Payment Method:</p>
+                <p className="text-sm font-medium text-gray-600">
+                  Choose Payment Method:
+                </p>
 
                 {/* M-Pesa Button */}
                 <button
@@ -279,7 +519,9 @@ export default function CartDrawer({
             {paymentMethod === 'mpesa' && (
               <div className="rounded-xl border border-green-100 bg-green-50 p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <p className="text-sm font-medium text-green-800">💚 Pay with M-Pesa</p>
+                  <p className="text-sm font-medium text-green-800">
+                    💚 Pay with M-Pesa
+                  </p>
                   <button
                     onClick={() => setPaymentMethod(null)}
                     className="text-xs text-green-600 hover:text-green-700"
@@ -307,13 +549,17 @@ export default function CartDrawer({
 
                 {mpesaStatus === 'success' && mpesaMessage && (
                   <div className="mt-3 rounded-lg bg-green-100 p-3">
-                    <p className="text-center text-sm font-medium text-green-800">{mpesaMessage}</p>
+                    <p className="text-center text-sm font-medium text-green-800">
+                      {mpesaMessage}
+                    </p>
                   </div>
                 )}
 
                 {mpesaStatus === 'error' && mpesaMessage && (
                   <div className="mt-3 rounded-lg bg-red-100 p-3">
-                    <p className="text-center text-sm font-medium text-red-800">{mpesaMessage}</p>
+                    <p className="text-center text-sm font-medium text-red-800">
+                      {mpesaMessage}
+                    </p>
                   </div>
                 )}
               </div>
@@ -323,7 +569,9 @@ export default function CartDrawer({
             {paymentMethod === 'paystack' && (
               <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <p className="text-sm font-medium text-blue-800">💳 Pay with Paystack</p>
+                  <p className="text-sm font-medium text-blue-800">
+                    💳 Pay with Paystack
+                  </p>
                   <button
                     onClick={() => setPaymentMethod(null)}
                     className="text-xs text-blue-600 hover:text-blue-700"
@@ -351,13 +599,17 @@ export default function CartDrawer({
 
                 {paystackStatus === 'success' && paystackMessage && (
                   <div className="mt-3 rounded-lg bg-green-100 p-3">
-                    <p className="text-center text-sm font-medium text-green-800">{paystackMessage}</p>
+                    <p className="text-center text-sm font-medium text-green-800">
+                      {paystackMessage}
+                    </p>
                   </div>
                 )}
 
                 {paystackStatus === 'error' && paystackMessage && (
                   <div className="mt-3 rounded-lg bg-red-100 p-3">
-                    <p className="text-center text-sm font-medium text-red-800">{paystackMessage}</p>
+                    <p className="text-center text-sm font-medium text-red-800">
+                      {paystackMessage}
+                    </p>
                   </div>
                 )}
               </div>
