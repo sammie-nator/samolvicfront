@@ -78,10 +78,29 @@ export default function CartDrawer({
     setMpesaStatus(null)
     setMpesaMessage('')
 
-    const orderNumber = `ORD-${Date.now()}`
+    // Keep under Daraja AccountReference limit (~12 chars) where possible
+    const orderNumber = `S${Date.now().toString().slice(-11)}`
+
+    const goSuccess = () => {
+      const url = `/payment/success?orderNumber=${encodeURIComponent(orderNumber)}&amount=${cartTotal}&method=M-Pesa`
+      window.location.assign(url)
+    }
+
+    const goFailure = (reason) => {
+      const msg = reason || 'Payment failed'
+      const code = /cancel/i.test(msg)
+        ? 'CANCELLED'
+        : /timeout|timed out/i.test(msg)
+          ? 'TIMEOUT'
+          : /insufficient/i.test(msg)
+            ? 'INSUFFICIENT_FUNDS'
+            : 'TRANSACTION_DECLINED'
+      const url = `/payment/failure?orderNumber=${encodeURIComponent(orderNumber)}&amount=${cartTotal}&method=M-Pesa&errorCode=${code}&errorMessage=${encodeURIComponent(msg)}`
+      window.location.assign(url)
+    }
 
     try {
-      console.log('📱 M-Pesa Payment...')
+      console.log('📱 M-Pesa Payment...', { orderNumber, amount: cartTotal })
 
       const response = await fetch(`${API_URL}/api/mpesa/stkpush`, {
         method: 'POST',
@@ -93,71 +112,69 @@ export default function CartDrawer({
         }),
       })
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
+      const data = await response.json().catch(() => ({}))
 
-      const data = await response.json()
-
-      if (!data.success) {
+      if (!response.ok || !data.success) {
         setMpesaStatus('error')
-        setMpesaMessage(`❌ ${getErrorMessage(data?.error)}`)
+        setMpesaMessage(`❌ ${getErrorMessage(data?.error) || `HTTP ${response.status}`}`)
         setMpesaPaying(false)
         return
       }
 
-      // STK sent — wait for callback confirmation before redirect
+      const confirmedOrder =
+        data.data?.orderNumber || data.orderNumber || orderNumber
+
       setMpesaStatus('pending')
       setMpesaMessage(
-        '✅ STK Push sent! Enter your M-Pesa PIN on your phone. Waiting for confirmation…'
+        'STK sent. Enter your M-Pesa PIN on your phone. This page will update automatically…'
       )
 
-      const maxAttempts = 40 // ~2 minutes at 3s interval
+      // Poll backend; backend queries Safaricom STK status (not only callback)
+      const maxAttempts = 45 // ~2.5 min @ 3s
       let attempts = 0
 
       const poll = async () => {
         attempts += 1
         try {
           const statusRes = await fetch(
-            `${API_URL}/api/mpesa/status/${encodeURIComponent(orderNumber)}`
+            `${API_URL}/api/mpesa/status/${encodeURIComponent(confirmedOrder)}`,
+            { cache: 'no-store' }
           )
-          if (statusRes.ok) {
-            const statusData = await statusRes.json()
-            if (statusData.status === 'COMPLETED') {
-              setMpesaStatus('success')
-              setMpesaMessage('✅ Payment confirmed!')
-              setMpesaPaying(false)
-              const successUrl = `/payment/success?orderNumber=${orderNumber}&amount=${cartTotal}&method=M-Pesa`
-              console.log('Payment confirmed, redirecting:', successUrl)
-              window.location.href = successUrl
-              return
-            }
-            if (statusData.status === 'FAILED') {
-              setMpesaStatus('error')
-              setMpesaMessage(
-                `❌ Payment failed: ${statusData.failureReason || 'Cancelled or declined'}`
-              )
-              setMpesaPaying(false)
-              return
-            }
+          const statusData = await statusRes.json().catch(() => ({}))
+          console.log(`Poll #${attempts}:`, statusData)
+
+          if (statusRes.ok && statusData.status === 'COMPLETED') {
+            setMpesaStatus('success')
+            setMpesaMessage('Payment confirmed! Redirecting…')
+            setMpesaPaying(false)
+            goSuccess()
+            return
+          }
+
+          if (statusRes.ok && statusData.status === 'FAILED') {
+            setMpesaStatus('error')
+            setMpesaMessage(statusData.failureReason || 'Payment failed')
+            setMpesaPaying(false)
+            goFailure(statusData.failureReason || 'Payment failed or cancelled')
+            return
           }
         } catch (pollErr) {
           console.warn('Status poll error:', pollErr)
         }
 
         if (attempts >= maxAttempts) {
-          setMpesaStatus('error')
-          setMpesaMessage(
-            `⏱️ Timed out waiting for payment. If you paid, contact support with order ${orderNumber}`
-          )
           setMpesaPaying(false)
+          goFailure(
+            `Timed out waiting for confirmation. Order ${confirmedOrder}. If money was deducted, contact support.`
+          )
           return
         }
 
         setTimeout(poll, 3000)
       }
 
-      setTimeout(poll, 3000)
+      // First poll after short delay so STK can register
+      setTimeout(poll, 4000)
     } catch (err) {
       console.error('M-Pesa error:', err)
       setMpesaStatus('error')
@@ -217,11 +234,13 @@ export default function CartDrawer({
       if (data.success && data.data?.authorizationUrl) {
         console.log('Redirecting to Paystack...')
 
+        // Show success confirmation with order number
         setPaystackStatus('success')
         setPaystackMessage(
           `✅ Order #${orderNumber} created! Redirecting to payment page...`
         )
 
+        // Store order info before redirecting (in case user returns)
         sessionStorage.setItem(
           'paymentOrder',
           JSON.stringify({
@@ -233,6 +252,7 @@ export default function CartDrawer({
           })
         )
 
+        // Redirect after 2 seconds
         setTimeout(() => {
           console.log('Redirecting to Paystack authorization URL')
           window.location.href = data.data.authorizationUrl
@@ -255,13 +275,14 @@ export default function CartDrawer({
   // ============================================================================
 
   const handleCloseAfterPayment = () => {
+    // Clear everything
     setOrderConfirmation(null)
     setPaymentMethod(null)
     onClose()
   }
 
   // ============================================================================
-  // RENDER: ORDER CONFIRMATION SCREEN
+  // RENDER: ORDER CONFIRMATION SCREEN (Only for M-Pesa confirmation in drawer)
   // ============================================================================
 
   if (orderConfirmation) {
@@ -269,19 +290,23 @@ export default function CartDrawer({
       <div className="fixed inset-0 z-[60] flex justify-end">
         <div className="absolute inset-0 bg-black/40" onClick={handleCloseAfterPayment} />
         <div className="relative flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
+          {/* CLOSE BUTTON */}
           <div className="flex items-center justify-end border-b px-5 py-4">
             <button onClick={handleCloseAfterPayment} className="rounded-full p-1 hover:bg-stone-100">
               <FiX size={22} />
             </button>
           </div>
 
+          {/* CONFIRMATION CONTENT */}
           <div className="flex-1 overflow-y-auto p-5">
+            {/* SUCCESS ICON */}
             <div className="mb-6 flex justify-center">
               <div className="rounded-full bg-green-100 p-4">
                 <FiCheckCircle size={48} className="text-green-600" />
               </div>
             </div>
 
+            {/* THANK YOU MESSAGE */}
             <h2 className="mb-2 text-center text-2xl font-bold text-gray-800">
               Thank You! 🎉
             </h2>
@@ -289,6 +314,7 @@ export default function CartDrawer({
               Your payment has been received
             </p>
 
+            {/* ORDER DETAILS CARD */}
             <div className="mb-6 rounded-lg border-2 border-green-200 bg-green-50 p-4">
               <div className="space-y-3">
                 <div className="flex justify-between">
@@ -344,6 +370,7 @@ export default function CartDrawer({
               </div>
             </div>
 
+            {/* ORDER ITEMS */}
             <div className="mb-6">
               <h3 className="mb-3 text-sm font-bold text-gray-700">
                 Order Items ({orderConfirmation.items.length})
@@ -365,6 +392,7 @@ export default function CartDrawer({
               </div>
             </div>
 
+            {/* NEXT STEPS */}
             <div className="mb-6 rounded-lg bg-blue-50 p-4">
               <h3 className="mb-2 text-sm font-bold text-blue-900">
                 What Happens Next?
@@ -377,6 +405,7 @@ export default function CartDrawer({
               </ul>
             </div>
 
+            {/* IMPORTANT NOTE */}
             <div className="mb-6 rounded-lg bg-yellow-50 p-3">
               <p className="text-xs text-yellow-800">
                 <strong>⚠️ Important:</strong> Your payment has been completed.
@@ -385,7 +414,9 @@ export default function CartDrawer({
             </div>
           </div>
 
+          {/* ACTION BUTTONS */}
           <div className="space-y-3 border-t p-5">
+            {/* CONTINUE SHOPPING */}
             <button
               onClick={handleCloseAfterPayment}
               className="w-full rounded-lg bg-green-600 py-3 text-sm font-semibold text-white transition hover:bg-green-700"
@@ -393,6 +424,7 @@ export default function CartDrawer({
               Continue Shopping
             </button>
 
+            {/* CONTACT SUPPORT */}
             <div className="flex gap-2">
               <button
                 onClick={() => {
@@ -423,6 +455,7 @@ export default function CartDrawer({
     <div className="fixed inset-0 z-[60] flex justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className="relative flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
+        {/* HEADER */}
         <div className="flex items-center justify-between border-b px-5 py-4">
           <h3 className="text-lg font-semibold">Your Cart ({cartCount})</h3>
           <button onClick={onClose} className="rounded-full p-1 hover:bg-stone-100">
@@ -430,6 +463,7 @@ export default function CartDrawer({
           </button>
         </div>
 
+        {/* CART ITEMS */}
         <div className="flex-1 overflow-y-auto p-5">
           {cart.length === 0 ? (
             <p className="py-12 text-center text-gray-500">Your cart is empty</p>
@@ -469,19 +503,23 @@ export default function CartDrawer({
           )}
         </div>
 
+        {/* CHECKOUT SECTION */}
         {cart.length > 0 && (
           <div className="space-y-4 border-t p-5">
+            {/* TOTAL */}
             <div className="flex justify-between text-lg font-bold">
               <span>Total</span>
               <span>KES {cartTotal.toLocaleString()}</span>
             </div>
 
+            {/* PAYMENT METHOD SELECTION */}
             {!paymentMethod ? (
               <div className="space-y-3">
                 <p className="text-sm font-medium text-gray-600">
                   Choose Payment Method:
                 </p>
 
+                {/* M-Pesa Button */}
                 <button
                   onClick={() => setPaymentMethod('mpesa')}
                   className="w-full rounded-lg border-2 border-green-500 bg-green-50 py-3 text-sm font-semibold text-green-700 transition hover:bg-green-100"
@@ -489,6 +527,7 @@ export default function CartDrawer({
                   💚 M-Pesa STK Push
                 </button>
 
+                {/* Paystack Button */}
                 <button
                   onClick={() => setPaymentMethod('paystack')}
                   className="w-full rounded-lg border-2 border-blue-500 bg-blue-50 py-3 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
@@ -496,6 +535,7 @@ export default function CartDrawer({
                   💳 Paystack Card Payment
                 </button>
 
+                {/* WhatsApp Fallback */}
                 <button
                   onClick={placeOrder}
                   className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 py-2.5 text-sm font-medium text-gray-600 transition hover:bg-stone-50"
@@ -507,6 +547,7 @@ export default function CartDrawer({
               </div>
             ) : null}
 
+            {/* M-PESA PAYMENT */}
             {paymentMethod === 'mpesa' && (
               <div className="rounded-xl border border-green-100 bg-green-50 p-4">
                 <div className="mb-3 flex items-center justify-between">
@@ -568,6 +609,7 @@ export default function CartDrawer({
               </div>
             )}
 
+            {/* PAYSTACK PAYMENT */}
             {paymentMethod === 'paystack' && (
               <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <div className="mb-3 flex items-center justify-between">
