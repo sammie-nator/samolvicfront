@@ -3,8 +3,8 @@ import { FiShoppingCart } from 'react-icons/fi'
 
 import { categories, products } from '../data/products'
 
-// Change this to your deployed backend URL
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000'
+// Must match CartDrawer / deployed backend
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:10000'
 
 export default function Products({ onAddToCart }) {
   const [activeCategory, setActiveCategory] = useState('All')
@@ -26,11 +26,12 @@ export default function Products({ onAddToCart }) {
     setPhone('')
     setPayStatus(null)
     setPayMessage('')
+    setPaying(false)
     setShowPayModal(true)
   }
 
   const handleMpesaPay = async () => {
-    if (!phone || phone.length < 9) {
+    if (!phone || phone.replace(/\D/g, '').length < 9) {
       setPayStatus('error')
       setPayMessage('Please enter a valid M-Pesa phone number')
       return
@@ -41,34 +42,112 @@ export default function Products({ onAddToCart }) {
     setPayStatus(null)
     setPayMessage('')
 
+    // Same format your backend already logged as COMPLETED
+    const orderNumber = `Samolvic-${selectedProduct.id}-${Date.now()}`
+    const amount = selectedProduct.price
+
+    const goSuccess = () => {
+      window.location.assign(
+        `/payment/success?orderNumber=${encodeURIComponent(orderNumber)}&amount=${amount}&method=M-Pesa`
+      )
+    }
+
+    const goFailure = (reason) => {
+      const msg = reason || 'Payment failed'
+      const code = /cancel/i.test(msg)
+        ? 'CANCELLED'
+        : /timeout|timed out/i.test(msg)
+          ? 'TIMEOUT'
+          : /insufficient/i.test(msg)
+            ? 'INSUFFICIENT_FUNDS'
+            : 'TRANSACTION_DECLINED'
+      window.location.assign(
+        `/payment/failure?orderNumber=${encodeURIComponent(orderNumber)}&amount=${amount}&method=M-Pesa&errorCode=${code}&errorMessage=${encodeURIComponent(msg)}`
+      )
+    }
+
     try {
       const res = await fetch(`${API_URL}/api/mpesa/stkpush`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          phone,
-          amount: selectedProduct.price,
-          accountReference: `Samolvic-${selectedProduct.id}-${Date.now()}`,
+          phone: phone.trim(),
+          amount,
+          accountReference: orderNumber,
         }),
       })
 
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
-      if (data.success) {
-        setPayStatus('success')
-        setPayMessage(
-          'STK Push sent! Check your phone and enter your M-Pesa PIN to complete payment.'
-        )
-      } else {
+      if (!res.ok || !data.success) {
         setPayStatus('error')
         setPayMessage(
-          data.error?.errorMessage || data.error || 'Payment failed. Try again.'
+          data.error?.errorMessage ||
+            data.error?.message ||
+            (typeof data.error === 'string' ? data.error : null) ||
+            'Payment failed. Try again.'
         )
+        setPaying(false)
+        return
       }
+
+      // Prefer orderNumber returned by backend (source of truth for status key)
+      const confirmedOrder =
+        data.data?.orderNumber || data.orderNumber || orderNumber
+
+      setPayStatus('pending')
+      setPayMessage(
+        'STK sent. Enter your M-Pesa PIN on your phone. Waiting for confirmation…'
+      )
+
+      const maxAttempts = 45
+      let attempts = 0
+
+      const poll = async () => {
+        attempts += 1
+        try {
+          const statusRes = await fetch(
+            `${API_URL}/api/mpesa/status/${encodeURIComponent(confirmedOrder)}`,
+            { cache: 'no-store' }
+          )
+          const statusData = await statusRes.json().catch(() => ({}))
+          console.log(`M-Pesa poll #${attempts}:`, statusData)
+
+          if (statusRes.ok && statusData.status === 'COMPLETED') {
+            setPayStatus('success')
+            setPayMessage('Payment confirmed! Redirecting…')
+            setPaying(false)
+            goSuccess()
+            return
+          }
+
+          if (statusRes.ok && statusData.status === 'FAILED') {
+            setPayStatus('error')
+            setPayMessage(statusData.failureReason || 'Payment failed')
+            setPaying(false)
+            goFailure(statusData.failureReason || 'Payment failed or cancelled')
+            return
+          }
+        } catch (pollErr) {
+          console.warn('Status poll error:', pollErr)
+        }
+
+        if (attempts >= maxAttempts) {
+          setPaying(false)
+          goFailure(
+            `Timed out waiting for confirmation. Order ${confirmedOrder}. If money was deducted, contact support.`
+          )
+          return
+        }
+
+        setTimeout(poll, 3000)
+      }
+
+      setTimeout(poll, 3000)
     } catch (err) {
+      console.error(err)
       setPayStatus('error')
       setPayMessage('Could not reach payment server. Please try again later.')
-    } finally {
       setPaying(false)
     }
   }
@@ -84,7 +163,6 @@ export default function Products({ onAddToCart }) {
           </p>
         </div>
 
-        {/* Category filters */}
         <div className="mt-10 flex flex-wrap justify-center gap-3">
           {categories.map((cat) => (
             <button
@@ -137,7 +215,6 @@ export default function Products({ onAddToCart }) {
                   </div>
                 </div>
 
-                {/* Action buttons */}
                 <div className="mt-4 flex gap-2">
                   <button
                     onClick={() => openMpesaModal(product)}
@@ -159,12 +236,13 @@ export default function Products({ onAddToCart }) {
         </div>
       </div>
 
-      {/* M-Pesa Payment Modal */}
       {showPayModal && selectedProduct && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/50"
-            onClick={() => setShowPayModal(false)}
+            onClick={() => {
+              if (payStatus !== 'pending' && !paying) setShowPayModal(false)
+            }}
           />
           <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <h3 className="text-lg font-semibold text-charcoal-900">
@@ -183,20 +261,28 @@ export default function Products({ onAddToCart }) {
                 placeholder="07XX XXX XXX or 2547XXXXXXXX"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                className="w-full rounded-lg border border-stone-200 px-4 py-2.5 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                disabled={paying || payStatus === 'pending'}
+                className="w-full rounded-lg border border-stone-200 px-4 py-2.5 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100 disabled:bg-gray-100"
               />
             </div>
 
             <button
               onClick={handleMpesaPay}
-              disabled={paying}
+              disabled={paying || payStatus === 'pending'}
               className="mt-5 w-full rounded-lg bg-green-600 py-3 text-sm font-semibold text-white transition hover:bg-green-700 disabled:opacity-60"
             >
-              {paying
-                ? 'Sending STK Push...'
-                : `Pay KES ${selectedProduct.price} via M-Pesa`}
+              {payStatus === 'pending'
+                ? 'Waiting for M-Pesa PIN…'
+                : paying
+                  ? 'Sending STK Push…'
+                  : `Pay KES ${selectedProduct.price} via M-Pesa`}
             </button>
 
+            {payStatus === 'pending' && (
+              <p className="mt-3 text-center text-sm text-amber-700">
+                {payMessage}
+              </p>
+            )}
             {payStatus === 'success' && (
               <p className="mt-3 text-center text-sm text-green-700">
                 {payMessage}
@@ -210,7 +296,8 @@ export default function Products({ onAddToCart }) {
 
             <button
               onClick={() => setShowPayModal(false)}
-              className="mt-4 w-full text-center text-sm text-gray-500 hover:text-gray-700"
+              disabled={paying || payStatus === 'pending'}
+              className="mt-4 w-full text-center text-sm text-gray-500 hover:text-gray-700 disabled:opacity-40"
             >
               Cancel
             </button>
