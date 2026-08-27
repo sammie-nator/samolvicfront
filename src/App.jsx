@@ -143,10 +143,11 @@ function App() {
     })
   }
 
-  const removeFromCart = (productId) => {
-    console.log('Removing from cart:', productId)
-    setCart((prevCart) => prevCart.filter((item) => item.id !== productId))
-  }
+  // Note: removeFromCart is commented out but available if needed
+  // const removeFromCart = (productId) => {
+  //   console.log('Removing from cart:', productId)
+  //   setCart((prevCart) => prevCart.filter((item) => item.id !== productId))
+  // }
 
   const updateQty = (productId, change) => {
     console.log(`Updating qty for ${productId} by ${change}`)
