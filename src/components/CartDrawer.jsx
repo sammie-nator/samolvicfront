@@ -52,33 +52,6 @@ export default function CartDrawer({
   }
 
   // ============================================================================
-  // HANDLE SUCCESSFUL PAYMENT
-  // ============================================================================
-
-  const handlePaymentSuccess = (method, orderNumber, amount) => {
-    // Create order confirmation object
-    const confirmation = {
-      orderNumber: orderNumber,
-      amount: amount,
-      method: method,
-      timestamp: new Date().toLocaleString(),
-      items: cart,
-      status: 'Pending',
-    }
-
-    setOrderConfirmation(confirmation)
-
-    // Clear cart and reset state
-    setPaymentMethod(null)
-    setMpesaPhone('')
-    setPaystackEmail('')
-    setMpesaStatus(null)
-    setPaystackStatus(null)
-    setMpesaMessage('')
-    setPaystackMessage('')
-  }
-
-  // ============================================================================
   // M-PESA HANDLER
   // ============================================================================
 
