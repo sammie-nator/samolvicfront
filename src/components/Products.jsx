@@ -100,7 +100,7 @@ export default function Products({ onAddToCart }) {
         'STK sent. Enter your M-Pesa PIN on your phone. Waiting for confirmation…'
       )
 
-      const maxAttempts = 45
+      const maxAttempts = 36
       let attempts = 0
 
       const poll = async () => {
@@ -140,10 +140,10 @@ export default function Products({ onAddToCart }) {
           return
         }
 
-        setTimeout(poll, 3000)
+        setTimeout(poll, 5000)
       }
 
-      setTimeout(poll, 3000)
+      setTimeout(poll, 5000)
     } catch (err) {
       console.error(err)
       setPayStatus('error')
