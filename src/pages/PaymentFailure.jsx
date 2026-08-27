@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { FiAlertCircle, FiHome, FiArrowLeft } from 'react-icons/fi'
+import { FiAlertCircle, FiHome } from 'react-icons/fi'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 export default function PaymentFailure() {
@@ -10,7 +10,6 @@ export default function PaymentFailure() {
   const errorCode = searchParams.get('errorCode') || 'UNKNOWN_ERROR'
   const errorMessage = searchParams.get('errorMessage') || 'Payment could not be processed'
   const amount = searchParams.get('amount') || '0'
-  const method = searchParams.get('method') || 'Payment'
 
   // Auto-redirect to shop after 10 seconds
   useEffect(() => {
